@@ -40,6 +40,26 @@ data_storage = None
 email_sender = None
 active_sessions = {}  # Store active chatbot sessions
 
+# ==================== Helper Functions ====================
+
+async def send_email_async(email_sender_instance, session_data):
+    """Send email asynchronously without blocking the response"""
+    try:
+        # Run the blocking email send in a thread pool
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, email_sender_instance.send_user_data, session_data)
+        print(f"✅ Email sent successfully for session {session_data['session_id']}")
+    except OSError as e:
+        # Network unreachable - common on Railway/cloud platforms
+        if e.errno == 101:
+            print(f"⚠️  Email sending skipped: Network unreachable (Railway may block SMTP)")
+            print(f"💡 Consider using SendGrid, Mailgun, or AWS SES instead")
+            print(f"📧 Data for session {session_data['session_id']} is saved in database")
+        else:
+            print(f"❌ Email sending failed (Network error): {e}")
+    except Exception as e:
+        print(f"❌ Email sending failed: {e}")
+
 # ==================== Models ====================
 
 class ChatMessage(BaseModel):
@@ -241,16 +261,14 @@ async def chat(message: ChatMessage):
     # Check if data collection is complete
     is_complete = bot.is_data_collection_complete()
     
-    # If complete and not already sent, send email
+    # If complete and not already sent, send email asynchronously (non-blocking)
     if is_complete and data_storage.is_data_complete(session_id):
         session_data = data_storage.get_session_data(session_id)
         if session_data["status"] != "complete":
             data_storage.mark_session_complete(session_id)
             if email_sender:
-                try:
-                    email_sender.send_user_data(session_data)
-                except Exception as e:
-                    print(f"Email sending failed: {e}")
+                # Send email in background without blocking the response
+                asyncio.create_task(send_email_async(email_sender, session_data))
     
     return ChatResponse(
         response=response,
@@ -421,17 +439,15 @@ async def chat_stream(message: ChatMessage):
             # After streaming is complete, send metadata
             is_complete = bot.is_data_collection_complete()
             
-            # Check if data collection is complete and send email
+            # Check if data collection is complete and send email asynchronously
             if is_complete and data_storage.is_data_complete(session_id):
                 session_data = data_storage.get_session_data(session_id)
                 if session_data["status"] != "complete":
                     data_storage.mark_session_complete(session_id)
                     if email_sender:
-                        try:
-                            email_sender.send_user_data(session_data)
-                            yield f"data: {json.dumps({'type': 'email_sent', 'message': '✅ Data successfully sent via email!'})}\n\n"
-                        except Exception as e:
-                            print(f"Email sending failed: {e}")
+                        # Send email in background without blocking the stream
+                        asyncio.create_task(send_email_async(email_sender, session_data))
+                        yield f"data: {json.dumps({'type': 'email_sent', 'message': '✅ Data successfully sent via email!'})}\n\n"
             
             # Send completion event with metadata
             yield f"data: {json.dumps({'type': 'done', 'data_collected': bot.collected_data, 'is_complete': is_complete})}\n\n"
@@ -513,20 +529,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             # Check completion
             is_complete = bot.is_data_collection_complete()
             
-            # Send email if complete
+            # Send email if complete (asynchronously)
             if is_complete and data_storage.is_data_complete(session_id):
                 session_data = data_storage.get_session_data(session_id)
                 if session_data["status"] != "complete":
                     data_storage.mark_session_complete(session_id)
                     if email_sender:
-                        try:
-                            email_sender.send_user_data(session_data)
-                            await manager.send_message({
-                                "type": "email_sent",
-                                "message": "✅ Data successfully sent via email!"
-                            }, session_id)
-                        except Exception as e:
-                            print(f"Email sending failed: {e}")
+                        # Send email in background without blocking WebSocket
+                        asyncio.create_task(send_email_async(email_sender, session_data))
+                        await manager.send_message({
+                            "type": "email_sent",
+                            "message": "✅ Data successfully sent via email!"
+                        }, session_id)
             
             # Send response to client
             await manager.send_message({
