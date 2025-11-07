@@ -17,15 +17,25 @@ load_dotenv()
 class EmailSender:
     """Handles sending structured data via email using SMTP"""
     
-    def __init__(self):
+    def __init__(self, data_storage=None):
         self.smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.sender_email = os.getenv("SENDER_EMAIL")
         self.sender_password = os.getenv("SENDER_PASSWORD")
-        self.recipient_email = os.getenv("RECIPIENT_EMAIL")
+        self.data_storage = data_storage
         
-        if not all([self.sender_email, self.sender_password, self.recipient_email]):
-            print("⚠️  Warning: Email credentials not fully configured in .env file")
+        if not all([self.sender_email, self.sender_password]):
+            print("⚠️  Warning: Email credentials (SENDER_EMAIL, SENDER_PASSWORD) not configured in .env file")
+    
+    def get_recipient_email(self) -> str:
+        """Get recipient email from database settings or fallback to .env"""
+        if self.data_storage:
+            db_email = self.data_storage.get_setting("recipient_email")
+            if db_email:
+                return db_email
+        
+        # Fallback to .env
+        return os.getenv("RECIPIENT_EMAIL", "")
     
     def send_user_data(self, session_data: Dict) -> bool:
         """
@@ -38,11 +48,22 @@ class EmailSender:
             bool: True if email sent successfully, False otherwise
         """
         try:
+            # Get recipient email from database or .env
+            recipient_email = self.get_recipient_email()
+            
+            if not recipient_email:
+                print("❌ Failed to send email: No recipient email configured. Please set it in Admin Dashboard Settings.")
+                return False
+            
+            if not all([self.sender_email, self.sender_password]):
+                print("❌ Failed to send email: SENDER_EMAIL or SENDER_PASSWORD not configured in .env file")
+                return False
+            
             # Create message
             msg = MIMEMultipart('alternative')
             msg['Subject'] = f"New User Data Collected - Session {session_data['session_id'][:8]}"
             msg['From'] = self.sender_email
-            msg['To'] = self.recipient_email
+            msg['To'] = recipient_email
             
             # Create HTML content
             html_content = self._create_html_email(session_data)
@@ -57,11 +78,20 @@ class EmailSender:
                 server.login(self.sender_email, self.sender_password)
                 server.send_message(msg)
             
-            print(f"✅ Email sent successfully to {self.recipient_email}")
+            print(f"✅ Email sent successfully to {recipient_email}")
             return True
             
+        except smtplib.SMTPAuthenticationError as e:
+            print(f"❌ Failed to send email: SMTP Authentication failed. Check SENDER_EMAIL and SENDER_PASSWORD in .env")
+            print(f"   Details: {str(e)}")
+            return False
+        except smtplib.SMTPException as e:
+            print(f"❌ Failed to send email: SMTP error - {str(e)}")
+            return False
         except Exception as e:
-            print(f"❌ Failed to send email: {str(e)}")
+            print(f"❌ Failed to send email: {type(e).__name__} - {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def _create_html_email(self, session_data: Dict) -> str:

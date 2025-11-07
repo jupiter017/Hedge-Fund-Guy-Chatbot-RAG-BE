@@ -25,11 +25,12 @@ class RAGSystem:
     
     def __init__(self):
         # Initialize OpenAI embeddings via LangChain
-        # Using dimensions=512 to match Pinecone index dimension
+        # Using dimensions=1536 for text-embedding-3-small (maximum for better semantic representation)
+        # If you want even better results, consider using text-embedding-3-large with 3072 dimensions
         self.embeddings = OpenAIEmbeddings(
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             model="text-embedding-3-small",
-            dimensions=512  # Match Pinecone index dimension
+            dimensions=1536  # Increased from 512 to 1536 for richer embeddings
         )
         
         # Initialize Pinecone
@@ -37,11 +38,12 @@ class RAGSystem:
         self.index_name = os.getenv("PINECONE_INDEX_NAME", "hedge-fund-knowledge")
         
         # Text splitter for chunking
+        # Smaller chunks with more overlap for better retrieval granularity
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
-            chunk_overlap=50,
+            chunk_overlap=100,  # Increased from 50 for better context preservation
             length_function=len,
-            separators=["\n\n", "\n", " ", ""]
+            separators=["\n\n", "\n", ". ", " ", ""]  # Added ". " separator for sentence boundaries
         )
         
         # Vector store (will be initialized after index creation)
@@ -104,7 +106,7 @@ class RAGSystem:
                 print(f"Creating new index: {self.index_name}")
                 self.pc.create_index(
                     name=self.index_name,
-                    dimension=512,  # text-embedding-3-small with dimensions=512
+                    dimension=1536,  # text-embedding-3-small with dimensions=1536 (increased from 512)
                     metric='cosine',
                     spec=ServerlessSpec(
                         cloud='aws',
@@ -201,13 +203,14 @@ class RAGSystem:
         
         print(f"✅ Successfully indexed {len(chunks)} chunks using LangChain")
     
-    def retrieve_context(self, query: str, top_k: int = 3) -> List[Dict]:
+    def retrieve_context(self, query: str, top_k: int = 5, score_threshold: float = 0.7) -> List[Dict]:
         """
         Retrieve relevant context from knowledge base
         
         Args:
             query: User's query
-            top_k: Number of most relevant chunks to retrieve
+            top_k: Number of most relevant chunks to retrieve (increased default from 3 to 5)
+            score_threshold: Minimum similarity score to include (0-1, lower is more similar for cosine distance)
             
         Returns:
             List of relevant text chunks with scores
@@ -220,15 +223,23 @@ class RAGSystem:
             # Use LangChain's similarity search with scores
             results = self.vectorstore.similarity_search_with_score(query, k=top_k)
             
-            # Format results
+            # Format results and filter by score threshold
             contexts = []
             for i, (doc, score) in enumerate(results):
-                contexts.append({
-                    'text': doc.page_content,
-                    'score': float(score),
-                    'chunk_id': i,
-                    'metadata': doc.metadata
-                })
+                # Note: Pinecone returns distance, where lower is better (0 = identical)
+                # Filter out results with poor similarity (high distance)
+                if score <= score_threshold:
+                    contexts.append({
+                        'text': doc.page_content,
+                        'score': float(score),
+                        'chunk_id': i,
+                        'metadata': doc.metadata
+                    })
+            
+            if not contexts:
+                print(f"⚠️  No relevant contexts found with score <= {score_threshold}")
+            else:
+                print(f"✅ Retrieved {len(contexts)} relevant contexts (filtered from {len(results)})")
             
             return contexts
             
@@ -236,26 +247,28 @@ class RAGSystem:
             print(f"❌ Error retrieving context: {str(e)}")
             return []
     
-    def get_augmented_context(self, query: str, top_k: int = 3) -> str:
+    def get_augmented_context(self, query: str, top_k: int = 5, score_threshold: float = 0.7) -> str:
         """
         Get formatted context string to augment the chatbot's knowledge
         
         Args:
             query: User's query
-            top_k: Number of contexts to retrieve
+            top_k: Number of contexts to retrieve (increased from 3 to 5)
+            score_threshold: Minimum similarity score threshold
             
         Returns:
             Formatted context string
         """
-        contexts = self.retrieve_context(query, top_k)
+        contexts = self.retrieve_context(query, top_k, score_threshold)
         
         if not contexts:
             return ""
         
-        # Format contexts into a single string
+        # Format contexts into a single string with relevance indicators
         context_str = "Relevant information from knowledge base:\n\n"
         for i, ctx in enumerate(contexts, 1):
-            context_str += f"[Context {i}]:\n{ctx['text']}\n\n"
+            relevance = "High" if ctx['score'] < 0.3 else "Medium" if ctx['score'] < 0.5 else "Moderate"
+            context_str += f"[Context {i} - Relevance: {relevance}, Score: {ctx['score']:.3f}]:\n{ctx['text']}\n\n"
         
         return context_str
     
@@ -306,9 +319,9 @@ if __name__ == "__main__":
     print("\nIndex Stats:")
     print(rag.get_index_stats())
     
-    # Test retrieval
+    # Test retrieval with improved parameters
     test_query = "What are some good trading strategies for momentum trading?"
     print(f"\nTest Query: {test_query}")
     print("\nRetrieved Context:")
-    context = rag.get_augmented_context(test_query, top_k=2)
+    context = rag.get_augmented_context(test_query, top_k=5, score_threshold=0.7)
     print(context)

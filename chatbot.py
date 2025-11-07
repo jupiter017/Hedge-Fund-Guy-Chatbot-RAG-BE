@@ -111,25 +111,37 @@ DO:
                     extracted['name'] = match.group(1).strip()
                     break
         
-        # Extract email
+        # Extract email first (important: do this before income to avoid conflicts)
         if not self.collected_data["email"]:
             email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
             match = re.search(email_pattern, user_message)
             if match:
                 extracted['email'] = match.group(0).strip()
         
-        # Extract income (various formats)
+        # Extract income (various formats) - but exclude if it's part of an email
         if not self.collected_data["income"]:
+            # First, remove any email addresses from the message to avoid extracting numbers from them
+            message_without_email = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '', user_message)
+            
             income_patterns = [
-                r'\$?\d{1,3}(?:,?\d{3})*(?:k|K)?(?:\s*[-to]\s*\$?\d{1,3}(?:,?\d{3})*(?:k|K)?)?(?:\s*(?:a year|per year|annually))?',
-                r'\d{1,3}(?:,?\d{3})*(?:\s*dollars)?(?:\s*(?:a year|per year|annually))?',
-                r'(?:around|about|approximately)\s+\$?\d{1,3}(?:,?\d{3})*k?',
+                # Match explicit income formats with dollar signs or 'k' suffix
+                r'\$\s*\d{1,3}(?:,\d{3})*(?:\s*k)?(?:\s*[-to]+\s*\$?\s*\d{1,3}(?:,\d{3})*(?:\s*k)?)?',
+                r'\d{1,3}(?:,\d{3})*\s*k(?:\s*[-to]+\s*\d{1,3}(?:,\d{3})*\s*k)?',  # e.g., "100k" or "50k-100k"
+                # Match numbers with explicit income context words
+                r'(?:income|salary|earn|make|making)\s+(?:is|of|about|around|approximately)?\s*\$?\s*\d{1,3}(?:,\d{3})*(?:\s*k)?',
+                r'\$?\s*\d{1,3}(?:,\d{3})*(?:\s*k)?(?:\s+(?:per year|a year|annually|annual|yearly))',
+                # Match income ranges
+                r'\d{1,3}(?:,\d{3})*\s*[-to]+\s*\d{1,3}(?:,\d{3})*(?:\s*k)?(?:\s+(?:per year|a year|annually))?',
             ]
+            
             for pattern in income_patterns:
-                match = re.search(pattern, user_message, re.IGNORECASE)
+                match = re.search(pattern, message_without_email, re.IGNORECASE)
                 if match:
-                    extracted['income'] = match.group(0).strip()
-                    break
+                    income_value = match.group(0).strip()
+                    # Additional validation: income should contain dollar sign, 'k', or income-related words
+                    if any(indicator in income_value.lower() for indicator in ['$', 'k', 'income', 'salary', 'earn', 'make', 'year', 'annual']):
+                        extracted['income'] = income_value
+                        break
         
         return extracted
     
@@ -140,10 +152,18 @@ DO:
         # Add RAG context if available
         if self.rag_system:
             try:
-                rag_context = self.rag_system.get_augmented_context(user_message, top_k=2)
+                # Increased top_k from 2 to 5 for better knowledge coverage
+                # Added score_threshold to filter low-quality matches
+                rag_context = self.rag_system.get_augmented_context(
+                    user_message, 
+                    top_k=5, 
+                    score_threshold=0.7
+                )
                 if rag_context:
                     context += f"\n\n{rag_context}\n"
-                    context += "Use the above information from the knowledge base to inform your response, but maintain your personality and don't directly quote it unless natural.\n"
+                    context += "IMPORTANT: Use the above information from the knowledge base to inform your response. "
+                    context += "Reference specific facts, data, and insights from the knowledge base when relevant. "
+                    context += "Maintain your personality but integrate this knowledge naturally into your responses.\n"
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {str(e)}")
         

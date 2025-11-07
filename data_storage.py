@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 from sqlalchemy.orm import Session as DBSession
-from database import Session, ConversationEntry, get_session_maker, init_database
+from database import Session, ConversationEntry, Settings, get_session_maker, init_database
 
 
 class DataStorage:
@@ -242,6 +242,50 @@ class DataStorage:
                 })
             
             return result
+        finally:
+            db.close()
+    
+    def get_setting(self, key: str) -> Optional[str]:
+        """Get a setting value by key"""
+        db = self._get_db()
+        try:
+            from database import Settings
+            setting = db.query(Settings).filter(Settings.key == key).first()
+            return setting.value if setting else None
+        finally:
+            db.close()
+    
+    def set_setting(self, key: str, value: str) -> bool:
+        """Set a setting value"""
+        db = self._get_db()
+        try:
+            from database import Settings
+            setting = db.query(Settings).filter(Settings.key == key).first()
+            
+            if setting:
+                setting.value = value
+                setting.updated_at = datetime.utcnow()
+            else:
+                setting = Settings(key=key, value=value)
+                db.add(setting)
+            
+            db.commit()
+            print(f"✅ Saved setting: {key}")
+            return True
+        except Exception as e:
+            print(f"❌ Error saving setting: {e}")
+            db.rollback()
+            return False
+        finally:
+            db.close()
+    
+    def get_all_settings(self) -> Dict[str, str]:
+        """Get all settings as a dictionary"""
+        db = self._get_db()
+        try:
+            from database import Settings
+            settings = db.query(Settings).all()
+            return {s.key: s.value for s in settings}
         finally:
             db.close()
 

@@ -77,6 +77,15 @@ class HealthCheck(BaseModel):
     email_ready: bool
     postgresql_ready: bool
 
+class SettingsUpdate(BaseModel):
+    recipient_email: EmailStr
+
+class SettingsResponse(BaseModel):
+    recipient_email: Optional[str]
+    email_notifications_enabled: bool
+    auto_send_on_complete: bool
+    is_configured: bool
+
 # ==================== Startup/Shutdown ====================
 
 @app.on_event("startup")
@@ -107,7 +116,7 @@ async def startup_event():
     # Initialize Email Sender
     try:
         print("📧 Initializing email sender...")
-        email_sender = EmailSender()
+        email_sender = EmailSender(data_storage=data_storage)
         print("✅ Email sender ready")
     except Exception as e:
         print(f"⚠️  Email sender initialization failed: {e}")
@@ -321,6 +330,65 @@ async def get_admin_dashboard():
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Dashboard error: {str(e)}")
+
+@app.get("/api/admin/settings", response_model=SettingsResponse)
+async def get_settings():
+    """Get application settings"""
+    if not data_storage:
+        raise HTTPException(status_code=500, detail="Data storage not initialized")
+    
+    try:
+        recipient_email = data_storage.get_setting("recipient_email")
+        email_notifications_enabled = data_storage.get_setting("email_notifications_enabled")
+        auto_send_on_complete = data_storage.get_setting("auto_send_on_complete")
+        
+        # Convert string booleans to actual booleans
+        email_enabled = email_notifications_enabled != "false" if email_notifications_enabled else True
+        auto_send = auto_send_on_complete != "false" if auto_send_on_complete else True
+        
+        is_configured = bool(recipient_email and '@' in recipient_email)
+        
+        return SettingsResponse(
+            recipient_email=recipient_email,
+            email_notifications_enabled=email_enabled,
+            auto_send_on_complete=auto_send,
+            is_configured=is_configured
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get settings: {str(e)}")
+
+@app.post("/api/admin/settings", response_model=SettingsResponse)
+async def update_settings(settings_update: SettingsUpdate):
+    """Update application settings"""
+    if not data_storage:
+        raise HTTPException(status_code=500, detail="Data storage not initialized")
+    
+    try:
+        # Update the recipient email
+        success = data_storage.set_setting("recipient_email", settings_update.recipient_email)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save settings")
+        
+        # Return updated settings
+        recipient_email = data_storage.get_setting("recipient_email")
+        email_notifications_enabled = data_storage.get_setting("email_notifications_enabled")
+        auto_send_on_complete = data_storage.get_setting("auto_send_on_complete")
+        
+        # Convert string booleans to actual booleans
+        email_enabled = email_notifications_enabled != "false" if email_notifications_enabled else True
+        auto_send = auto_send_on_complete != "false" if auto_send_on_complete else True
+        
+        is_configured = bool(recipient_email and '@' in recipient_email)
+        
+        return SettingsResponse(
+            recipient_email=recipient_email,
+            email_notifications_enabled=email_enabled,
+            auto_send_on_complete=auto_send,
+            is_configured=is_configured
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
 
 @app.post("/api/chat/stream")
 async def chat_stream(message: ChatMessage):

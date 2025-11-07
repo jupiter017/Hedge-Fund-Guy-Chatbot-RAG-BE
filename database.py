@@ -44,6 +44,15 @@ class ConversationEntry(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 
+class Settings(Base):
+    """Database model for application settings"""
+    __tablename__ = 'settings'
+    
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # Database connection
 def get_database_url():
     """Get PostgreSQL connection URL from environment"""
