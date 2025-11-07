@@ -28,15 +28,15 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev server
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Global instances
 rag_system = None
-data_storage = None
+data_storage = None     
 email_sender = None
 active_sessions = {}  # Store active chatbot sessions
 
